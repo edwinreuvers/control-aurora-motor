@@ -1,0 +1,50 @@
+func MakeSineWave(lmotor[],time[],cf,amp,lmotorAvg)
+' MakeSineWave makes a sine trajectory for the motor position over time.
+
+' Inputs:
+    ' time      = the time-axis [s]
+    ' lmotor    = an empty array in which the motor position over time will be placed [mm]
+    ' cf        = the cycle frequency (of the motor movement) [Hz]
+    ' amp       = the amplitude (of the motor movement) [mm]
+    ' lmotorAvg = the average motor position (i.e. at sin(-0.5*pi)) [mm]
+' Outputs:
+    ' lmotor    = the motor position over time [mm]
+
+    var pi := Atan(1.0)*4;
+    var idx%, tc;
+    for idx%:=0 to Len(sig[])-1 do
+        lmotor[idx%] := lmotorAvg+amp*Sin(cf*time[idx%]*2*pi+0.5*pi);
+    next;
+return 1;
+end;
+
+func CorrectSignal(lmotor[])
+' CorrectSignal correct the signal that will be 'played' by PlayWaveAdd based on whether the DAC is in 5V or 10V mode.
+
+    var n%:=1, Response%;
+    
+    U1401Open(n%);
+    U1401Write(Print$("GAIN,M, 1;"));
+    U1401Read(Response%); 'Get the result.
+    U1401Close();
+
+    DACscale := Response%/1000;
+    ArrDiv(lmotor,DACscale/5); ' Adjust motor position amplitude
+return 1;
+end;
+
+func BringToStartPosition()
+' BringToStartPosition this function bring the motor to the initial position (the motor position at the start (t=0))
+
+    FileNew(0, 1); ' Open a new datafile
+    SampleStart(0); ' Start sampling
+    while SampleStatus() <> 2 do Yield() wend; ' Wait until samples has (really) started
+    var VPre := ChanValue(1,0);
+    SampleSeqVar(1, Vpre*Pow(2,32)/(2*5));
+    SampleSeqVar(2, lmotor[0]*Pow(2,32)/(2*5));
+    SampleKey("I");
+    Yield(abs(Vpre-lmotor[0])/0.2+1); ' Keep changing the motor position until we reach the starting position
+    SampleStop(); ' Stop sampling
+    FileClose(-1,-1);  ' Close the file and do not save it
+return 1;
+end;

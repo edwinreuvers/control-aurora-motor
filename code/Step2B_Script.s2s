@@ -1,0 +1,49 @@
+#include "Step2B_Script_Functions.s2s" ' Load functions
+
+' User inputs - motor motion
+var cf := 1.0; ' [Hz] cycle frequency of sinusoidal motor position
+var amp := 2.5; ' [mm] motor position amplitude
+var lmotorAvg := 0.0; ' [mm] motor offset position
+
+' User inputs - stimulation
+var tStimOn := -0.04; ' [s] time of muscle stimulation onset (relative to the time of start of one cycle)
+var tStimOff := 0.37; ' [s] time of muscle stimulation offset (relative to the time of start of one cycle)
+var stimCF := 250; ' [Hz] muscle stimulation frequency
+var StimOnCycle[5];
+StimOnCycle[0] := 0; StimOnCycle[1] := 1; StimOnCycle[2] := 1;
+StimOnCycle[3] := 1; StimOnCycle[4] := 0; ' 1 indicates that muscle stimulation should be ON, and 0 indicates OFF (for every cycle)
+
+' User inputs - calibration
+var coef := 1.25; ' [mm/V] relation between motor position output in millimeters and motor position output in voltage (i.e. 1 V equals 1.25 mm)
+
+' Initialize signal, time etc.
+var ncycles% := Len(StimOnCycle); ' number of cycles
+var nstep% := 10000; ' number of steps per second (i.e. dt = 1/nstep%)
+var nsamp% := round(nstep%/cf*ncycles%); ' number of samples of our signal
+var time[nsamp%], lmotor[nsamp%], stim[nsamp%], sig[nsamp%][2]; ' declare time and lmotor variable
+
+' Make time & motor position signal
+ArrConst(time[], 1.0/nstep%); time[0] := 0; ArrIntgl(time[]); ' [s] time-axis
+MakeSineWave(time,lmotor,cf,amp,lmotorAvg);
+MakeStimulation(time,stim,tStimOn,tStimOff,stimCF,StimOnCycle[]);
+ArrDiv(lmotor,coef); ' From motor position in millimeters to motor position in voltage
+
+' Make signal sent to both DAC outputs
+ArrAdd(sig[][0],lmotor[]); 
+ArrAdd(sig[][1],stim[]);
+CorrectSignal(sig[][]); ' Correct motor position signal depending on DAC range
+
+' Add to play waveform configuration
+var dacs%[2]; dacs%[0] := 0; dacs%[1] := 1;  'list of dacs
+PlayWaveAdd("X", "SineWave", dacs%, nstep%, sig[][]); '
+PlayWaveCycles("X",1);
+
+' Open new datafile and start sampling!
+BringToStartPosition(sig[][]); ' Bring motor to starting position
+FileNew(0, 1); ' Open new datafile
+SampleStart(0); ' Start sampling
+while SampleStatus() <> 2 do Yield() wend; ' Wait until samples has (really) started
+SampleKey("X");
+while PlayWaveStatus$() = "X" do Yield() wend; ' Wait until waveform has been played
+SampleStop(); ' Stop sampling
+FileSave();

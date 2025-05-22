@@ -1,0 +1,48 @@
+' Functions
+func MakeStimulation(time[],stim[],tStimOn,tStimOff,stimCF,StimOnCycle[])
+' MakeStimStimulation calculates the stimulation over time.
+
+' Inputs:
+    ' time      = the time-axis [s]
+    ' stim      = an empty array in which the stimulation over time will be placed
+    ' tStimOn   = time onset of stimulation [s]
+    ' tStimOff  = time offset of stimulation [s]
+    ' stimCF    = stimulation frequency [Hz]
+' Outputs:
+    ' stim      = the stimulation over time
+
+    
+    var tBlock := 1.0/stimCF; ' [s] duration between two stimulation pulses
+    ArrConst(stim[], 0.0); 
+    var idx%, jdx%;
+    for idx%:=0 to Len(time[])-1 do 
+        if time[idx%]>=tStimOn+jdx%/cf and time[idx%]<=tStimOff+jdx%/cf+0.5*tBlock then
+            if ((time[idx%]-tStimOn) mod tBlock) <= tBlock/2 then
+                stim[idx%] := 10;
+            else
+                stim[idx%] := 0;
+            endif;
+        endif;
+    next;
+return 1;
+end;
+
+func CorrectSignal(signal[][])
+' CorrectSignal correct the signal that will be 'played' by PlayWaveAdd based on whether the DAC is in 5V or 10V mode.
+
+' Inputs:
+    ' signal    = the signal that will be corrected [V]
+' Outputs:
+    ' signal    = the corrected signal [V]
+
+    var n%:=1, Response%;
+    
+    U1401Open(n%);
+    U1401Write(Print$("GAIN,M, 1;"));
+    U1401Read(Response%); 'Get the result.
+    U1401Close();
+
+    var DACscale := Response%/1000;
+    ArrDiv(signal,DACscale/5); ' Adjust motor position amplitude
+return 1;
+end;

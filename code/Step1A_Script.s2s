@@ -1,0 +1,39 @@
+' User inputs
+var cf := 1.0; ' [Hz] cycle frequency of sinusoidal motor position
+var amp := 1.5; ' [mm] motor position amplitude
+var lmotorAvg := 0.0; ' [mm] motor offset position
+var ncycles% := 5; ' number of cycles
+
+var coef := 1.25; ' [mm/V] relation between motor position output in millimeters and motor position output in voltage (i.e. 1 V equals 1.25 mm)
+
+' Initialize signal, time etc.
+var nstep% := 1000; ' number of steps per second (i.e. dt = 1/nstep%)
+var nsamp% := round(nstep%/cf); ' number of samples of our signal
+var time[nsamp%], lmotor[nsamp%]; ' declare time and lmotor variable
+
+' Make time signal
+ArrConst(time[], 1.0/nstep%); time[0] := 0; ArrIntgl(time[]);
+
+' Make motor length/position signal
+var pi := Atan(1.0)*4;
+var idx%;
+for idx% := 0 to Len(lmotor[])-1 do 
+    lmotor[idx%] := lmotorAvg+amp*Sin(time[idx%]*2*pi+0.5*pi);
+next;
+
+' From motor position in millimeters to motor position in voltage
+ArrDiv(lmotor,coef); ' From millimeters to voltage
+
+' Add to play waveform configuration
+PlayWaveAdd("X", "SineWave", 0, nstep%, lmotor[]); '
+PlayWaveCycles("X",ncycles%);
+
+' Open new datafile and start sampling!
+FileNew(0, 1); ' Open new datafile
+SampleStart(0); ' Start sampling
+while SampleStatus() <> 2 do Yield() wend; ' Wait until samples has (really) started
+SampleKey("X");
+while PlayWaveStatus$() = "X" do Yield() wend; ' Wait until waveform has been played
+SampleStop(); ' Stop sampling
+FileSave();
+
