@@ -1,0 +1,111 @@
+' Protocol to run a quick-release experiment.
+
+#include "Gen_Functions.s2s"
+
+' User inputs - motor motion
+var lmotor0 := -1.0; ' [mm] motor position at the start
+var dlmotor := -0.1; ' [mm] step change in motor position
+var durIso := 1.00; ' [s] duration of isometric parts
+var durStep := 0.004; ' [s] duration of step change
+
+' User inputs - stimulation
+var tStimOn := 0.50; ' [s] time of muscle stimulation onset (relative to the time of start of one cycle)
+var tStimOff := 1.10; ' [s] time of muscle stimulation offset (relative to the time of start of one cycle)
+var stimCF := 100.0; ' [Hz] muscle stimulation frequency
+
+' Initialize signal, time etc.
+var nstep% := 10000; ' number of steps per second (i.e. dt = 1/nstep%)
+var nsamp% := round(nstep%*(2*durIso+durStep)); ' number of samples of our signal
+var time[nsamp%], lmotor[nsamp%], stim[nsamp%], sig[nsamp%][2]; ' declare time and lmotor variable
+
+' Make time & motor position signal
+ArrConst(time[], 1.0/nstep%); time[0] := 0; ArrIntgl(time[]); ' [s] time-axis
+MakeQR(time[],lmotor[],lmotor0,dlmotor,durIso,durStep);
+MakeStimulation(time,stim,tStimOn,tStimOff,stimCF);
+ArrDiv(lmotor,coef); ' From motor position in millimeters to motor position in voltage
+TestMotorMotion(lmotor[],DACscale); ' Test whether motor motion is feasible/can be realised
+
+' Make signal sent to both DAC outputs
+ArrAdd(sig[][0],lmotor[]); 
+ArrAdd(sig[][1],stim[]);
+CorrectSignal(sig[][],DACscale); ' Correct motor position signal depending on DAC range
+
+' Add to play waveform configuration
+var dacs%[2]; dacs%[0] := 0; dacs%[1] := 1;  'list of dacs
+PlayWaveAdd("X", "SineWave", dacs%, nstep%, sig[][]); '
+PlayWaveCycles("X",1);
+
+' Open new datafile and start sampling!
+BringToPosition(sig[0][0]*DACscale/5); ' Bring motor to starting position
+FileNew(0, 1); ' Open new datafile
+SampleStart(0); ' Start sampling
+while SampleStatus() <> 2 do Yield() wend; ' Wait until samples has (really) started
+SampleKey("X");
+while PlayWaveStatus$() = "X" do Yield() wend; ' Wait until waveform has been played
+SampleStop(); ' Stop sampling
+FileSave();
+BringToPosition(LmotorRest); ' Bring motor to rest position
+FileClose(-1,-1);  ' Close the file and do not save it
+
+' Functions
+func MakeStimulation(time[],stim[],tStimOn,tStimOff,stimCF)
+' MakeStimStimulation calculates the stimulation over time.
+
+' Inputs:
+    ' time      = the time-axis [s]
+    ' stim      = an empty array in which the stimulation over time will be placed
+    ' tStimOn   = time onset of stimulation [s]
+    ' tStimOff  = time offset of stimulation [s]
+    ' stimCF    = stimulation frequency [Hz]
+' Outputs:
+    ' stim      = the stimulation over time
+
+    
+    var tBlock := 1.0/stimCF; ' [s] duration between two stimulation pulses
+    ArrConst(stim[], 0.0); 
+    var idx%;
+    for idx%:=0 to Len(time[])-1 do 
+        if time[idx%]>=tStimOn and time[idx%]<=tStimOff+0.5*tBlock then
+            if ((time[idx%]-tStimOn) mod tBlock) <= tBlock/2 then
+                stim[idx%] := 10;
+            else
+                stim[idx%] := 0;
+            endif;
+        endif;
+    next;
+return 1;
+end;
+
+func MakeQR(time[],lmotor[],lmotor0,dlmotor,durIso,durStep)
+' MakeQR makes a quick-release trajectory for the motor position over time.
+
+' Inputs:
+    ' time      = the time-axis [s]
+    ' lmotor    = an empty array in which the motor position over time will be placed [mm]
+    ' lmotor0   = the motor position at the start [mm]
+    ' dlmotor   = the 'instantenous' change in motor position due to the step [mm]
+    ' durIso    = the duration of the first isometric phase [s]
+    ' durStep   = the duration of the step/'instantenous' change in motor position [s]
+' Outputs:
+    ' lmotor    = the motor position over time [mm]
+
+    ' Define time points of this experiments
+    var tP1 := durIso; ' [s] time-point at which the first isometric phase ends
+    var tP2 := tP1+durStep; ' [s] time-point at which the step ends
+
+    ' Now make the signal input to the motor.
+    var vStep := dlmotor/durStep; ' [mm/s] motor velocity during the step
+    var idx%;
+    for idx%:=0 to Len(time[])-1 do 
+        if time[idx%] <= tP1 then
+            lmotor[idx%] := lmotor0;
+        endif;
+        if time[idx%]  > tP1 and time[idx%] <= tP2 then
+            lmotor[idx%] := lmotor0+(time[idx%]-tP1)*vStep;
+        endif;
+        if time[idx%]  > tP2 then
+            lmotor[idx%] := lmotor0+dlmotor;
+        endif;
+    next;
+return 1;
+end

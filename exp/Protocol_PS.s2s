@@ -1,0 +1,16 @@
+' User inputs - motor motion
+var lmotorr := 3.0; ' [mm] motor position at the start
+
+' Open new datafile and start sampling!
+FileNew(0, 1); ' Open a new datafile
+SampleStart(0); ' Start sampling
+Yield(1);
+while SampleStatus() <> 2 do Yield() wend; ' Wait until samples has (really) started
+var VPre := ChanValue(7,0);
+SampleSeqVar(1, Vpre*Pow(2,32)/(2*10));
+SampleSeqVar(2, lmotorr*Pow(2,32)/(2*10));
+SampleKey("I");
+Yield(abs(Vpre-lmotorr)/0.3+1); ' Keep changing the motor position until we reach the starting position
+SampleStop(); ' Stop sampling
+FileSave();
+FileClose(-1,-1);

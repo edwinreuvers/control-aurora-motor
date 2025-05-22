@@ -1,0 +1,167 @@
+' Protocol to run a stretch-shortening cycle with constant shortening and lengthening velocity, except around the transition from shortening to lengthening and vice versa.
+
+#include "Gen_Functions.s2s"
+
+' User inputs - motor motion
+var cf := 1.0; ' [Hz] cycle frequency of sinusoidal motor position
+var amp := 2.0; ' [mm] motor position amplitude
+var lmotorAvg := 0.0; ' [mm] motor offset position
+var fts := 0.8; ' [ ] fraction of the cycle time shortening 
+var acc := 1500; ' [mm/s^2] (maximal) acceleration of motor position for SCV
+
+' User inputs - stimulation
+var tStimOn := 0.00; ' [s] time of muscle stimulation onset (relative to the time of start of one cycle)
+var tStimOff := 0.63; ' [s] time of muscle stimulation offset (relative to the time of start of one cycle)
+var stimCF := 100.0; ' [Hz] muscle stimulation frequency
+var StimOnCycle[5];
+StimOnCycle[0] := 0;
+StimOnCycle[1] := 1;
+StimOnCycle[2] := 1;
+StimOnCycle[3] := 1;
+StimOnCycle[4] := 0; ' 1 indicates that muscle stimulation should be ON, and 0 indicates OFF (for every cycle)
+
+' Initialize signal, time etc.
+var ncycles% := Len(StimOnCycle); ' number of cycles
+var nstep% := 10000; ' number of steps per second (i.e. dt = 1/nstep%)
+var nsamp% := round(nstep%/cf*ncycles%); ' number of samples of our signal
+var time[nsamp%], lmotor[nsamp%], stim[nsamp%], sig[nsamp%][2]; ' declare time and lmotor variable
+
+' Make time & motor position signal
+ArrConst(time[], 1.0/nstep%); time[0] := 0; ArrIntgl(time[]); ' [s] time-axis
+MakeSCV(time,lmotor,cf,fts,amp,lmotorAvg,acc,ncycles%); ' smooth constant-velocity trajectory
+MakeStimulation(time,stim,tStimOn,tStimOff,stimCF,StimOnCycle[]);
+ArrDiv(lmotor,coef); ' From motor position in millimeters to motor position in voltage
+TestMotorMotion(lmotor[],DACscale); ' Test whether motor motion is feasible/can be realised
+
+' Make signal sent to both DAC outputs
+ArrAdd(sig[][0],lmotor[]); 
+ArrAdd(sig[][1],stim[]);
+CorrectSignal(sig[][],DACscale); ' Correct motor position signal depending on DAC range
+
+' Add to play waveform configuration
+var dacs%[2]; dacs%[0] := 0; dacs%[1] := 1;  'list of dacs
+PlayWaveAdd("X", "SineWave", dacs%, nstep%, sig[][]); '
+PlayWaveCycles("X",1);
+
+' Open new datafile and start sampling!
+BringToPosition(sig[0][0]*DACscale/5); ' Bring motor to starting position
+FileNew(0, 1); ' Open new datafile
+SampleStart(0); ' Start sampling
+while SampleStatus() <> 2 do Yield() wend; ' Wait until samples has (really) started
+SampleKey("X");
+while PlayWaveStatus$() = "X" do Yield() wend; ' Wait until waveform has been played
+SampleStop(); ' Stop sampling
+FileSave();
+BringToPosition(LmotorRest); ' Bring motor to rest position
+FileClose(-1,-1);  ' Close the file and do not save it
+
+' Functions
+func MakeStimulation(time[],stim[],tStimOn,tStimOff,stimCF,StimOnCycle[])
+' MakeStimStimulation calculates the stimulation over time.
+
+' Inputs:
+    ' time      = the time-axis [s]
+    ' stim      = an empty array in which the stimulation over time will be placed
+    ' tStimOn   = time onset of stimulation [s]
+    ' tStimOff  = time offset of stimulation [s]
+    ' stimCF    = stimulation frequency [Hz]
+' Outputs:
+    ' stim      = the stimulation over time
+
+    
+    var tBlock := 1.0/stimCF; ' [s] duration between two stimulation pulses
+    ArrConst(stim[], 0.0); 
+    var idx%, jdx%;
+    for jdx%:=0 to Len(StimOnCycle[])-1 do
+        for idx%:=0 to Len(time[])-1 do 
+            if time[idx%]>=tStimOn+jdx%/cf and time[idx%]<=tStimOff+jdx%/cf+0.5*tBlock then
+                if ((time[idx%]-tStimOn) mod tBlock) <= tBlock/2 then
+                    stim[idx%] := 10*StimOnCycle[jdx%];
+                else
+                    stim[idx%] := 0;
+                endif;
+            endif;
+        next;
+    next;
+return 1;
+end;
+
+func MakeSCV(time[],lmotor[],cf,fts,amp,lmotorAvg,acc,ncycles%)
+' MakeSCV makes a smooth V-shape trajectory for the motor position over time.
+
+' Inputs:
+    ' time      = the time-axis [s]
+    ' lmotor    = an empty array in which the motor position over time will be placed [mm]
+    ' cf        = the cycle frequency (of the motor movement) [Hz]
+    ' fts       = the fraction of the cycle time shortening [ ]
+    ' amp       = the amplitude (of the motor movement) [mm]
+    ' lmotorAvg = the average motor position (i.e. at sin(-0.5*pi)) [mm]
+' Outputs:
+    ' lmotor    = the motor position over time [mm]
+
+    var pi := Atan(1.0)*4; ' [ ] constant pi (approx 3.14)
+
+    ' Calculate short/leng velocities and times.
+    var tShort := fts/cf;
+    var tLeng := (1-fts)/cf;
+    var vShort := (pi*Sqrt(acc*(acc*Pow(pi,2)*Pow(tShort,2)+64*amp-16*amp*Pow(pi,2))) - acc*tShort*Pow(pi,2))/(4*(Pow(pi,2)-4));
+    var vLeng := -(pi*Sqrt(acc*(acc*Pow(pi,2)*Pow(tLeng,2)+64*amp-16*amp*Pow(pi,2))) - acc*tLeng*Pow(pi,2))/(4*(Pow(pi,2)-4));
+
+    ' Calculate acceleration time and constant velocity time and the time indiceses belonging to the transition from accerelation to constant velocity and visa versa
+    var tAcc1 := -vShort/(acc/2); ' [s] acceleration time
+    var tAcc2 := vLeng/(acc/2); ' [s] acceleration time
+    var tCon1 := tShort-2*tAcc1; ' [s] time spent shortening with constant velocity
+    var tCon2 := tLeng-2*tAcc2; ' [s] time spent lengthening with constant velocity
+    var tP1 := tAcc1, tP2 := tP1+tCon1, tP3 := tP2+tAcc1; ' [s] time points (at which a new part of the motion starts)
+    var tP4 := tP3+tAcc2, tP5 := tP4+tCon2, tP6 := tP5+tAcc2; ' [s] time points (at which a new part of the motion starts)
+
+    ' Calculate indices belonging to the time points (indices start counting from 0 [as in Python])
+    var iP1% := floor(tP1*nstep%)+1, iP2% := floor(tP2*nstep%)+1, iP3% := floor(tP3*nstep%)+1;
+    var iP4% := floor(tP4*nstep%)+1, iP5% := floor(tP5*nstep%)+1, iP6% := floor(tP6*nstep%);
+
+    ' Calculate motor position at the start of a new part/phase
+    var lmotorP0 := lmotorAvg + amp - ((-acc/2*Pow(0,2))/2 - (-acc/2*Pow(tP1,2)*cos((pi*0)/tP1))/Pow(pi,2));
+    var lmotorP1 := lmotorP0 + (-acc/2*Pow(tP1,2))/2 - (-acc/2*Pow(tP1,2)*cos((pi*tP1)/tP1))/Pow(pi,2);
+    var lmotorP2 := lmotorP1 + (tP2-tP1)*vShort - ((acc/2*Pow(tP2,2))/2 - acc/2*tP3*tP2 + (acc/2*cos((pi*0)/tAcc1)*Pow(tAcc1,2))/Pow(pi,2));
+    var lmotorP3 := lmotorP2 + ((acc/2*Pow(tP3,2))/2 - acc/2*tP3*tP3 + (acc/2*cos((pi*tAcc1)/tAcc1)*Pow(tAcc1,2))/Pow(pi,2)) - ((acc/2*Pow(tP3-tP3,2))/2 - (acc/2*cos((pi*(tP3-tP3))/(tP3-tP4))*Pow(tP3-tP4,2))/Pow(pi,2));
+    var lmotorP4 := lmotorP3 + ((acc/2*Pow(tAcc2,2))/2 - (acc/2*cos((pi*tAcc2)/tAcc2)*Pow(tAcc2,2))/Pow(pi,2));
+    var lmotorP5 := lmotorP4 + (tP5-tP4)*vLeng - (acc/2*tP6*tP5-(acc/2*Pow(tP5,2))/2-(acc/2*cos((pi*0)/tAcc2)*Pow(tAcc2,2))/Pow(pi,2));
+
+    ' Make motor motion for different parts/phases of the motion
+    var idx%, tc;
+    ArrConst(lmotor[], lmotorP0); ' fill with initial motor position first (not necasarry but OK)
+    for idx%:=0 to iP1%-1 do
+        tc := time[idx%];
+        lmotor[idx%] := lmotorP0 + (-acc/2*Pow(tc,2))/2 - (-acc/2*Pow(tP1,2)*cos((pi*tc)/tAcc1)/Pow(pi,2));
+    next;
+    for idx%:=iP1% to iP2%-1 do
+        tc := time[idx%];
+        lmotor[idx%] := lmotorP1 + (tc-tP1)*vShort;
+    next;
+    for idx%:=iP2% to iP3%-1 do
+        tc := time[idx%];
+        lmotor[idx%] := lmotorP2 + ((acc/2*Pow(tc,2))/2 - acc/2*tP3*tc + (acc/2*cos((pi*(tc-tP2))/tAcc1)*Pow(tAcc1,2))/Pow(pi,2));
+    next;
+    for idx%:=iP3% to iP4%-1 do
+        tc := time[idx%];
+        lmotor[idx%] := lmotorP3 + ((acc/2*Pow(tP3-tc,2))/2 - (acc/2*cos((pi*(tc-tP3))/tAcc2)*Pow(tAcc2,2))/Pow(pi,2));
+    next;
+    for idx%:=iP4% to iP5%-1 do
+        tc := time[idx%];
+        lmotor[idx%] := lmotorP4 + (tc-tP4)*vLeng;
+    next;
+    for idx%:=iP5% to iP6% do
+        tc := time[idx%];
+        lmotor[idx%] := lmotorP5 + (acc/2*tP6*tc - (acc/2*Pow(tc,2))/2 - (acc/2*cos((pi*(tc-tP5))/tAcc2)*Pow(tAcc2,2))/Pow(pi,2));
+    next;
+
+    ' Now we should repeat the signal nycles% times
+    var jdx% := 0, kdx%;
+    for idx%:=0 to ncycles%-1 do 
+        for kdx%:=0 to iP6%-1 do
+            lmotor[jdx%] := lMotor[kdx%];
+            jdx% := jdx%+1;
+        next;
+    next;
+return 1;
+end

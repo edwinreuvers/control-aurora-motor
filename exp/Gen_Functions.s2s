@@ -1,0 +1,65 @@
+' User inputs - calibration
+'var coef := 1.245417083711830; ' [mm/V] pilot01 relation between motor position output in millimeters and motor position output in voltage (i.e. 1 V equals 1.25 mm)
+'var coef := 1.245451460764986; ' [mm/V] pilot02 relation between motor position output in millimeters and motor position output in voltage (i.e. 1 V equals 1.25 mm)
+'var coef := 1.240980652946310; ' [mm/V] pilot03 relation between motor position output in millimeters and motor position output in voltage (i.e. 1 V equals 1.25 mm)
+var coef := 1.25; ' [mm/V] pilot03-left leg.
+
+var LmotorRest := -2.5; ' [V] rest position of motor
+
+var DACscale := GetDACscale();
+
+func GetDACscale()
+' GetDACscalecorrect return mode of the CED (either 5V or 10V mode).
+
+    var n%:=1, Response%;
+    
+    U1401Open(n%);
+    U1401Write(Print$("GAIN,M, 1;"));
+    U1401Read(Response%); 'Get the result.
+    U1401Close();
+
+    var DACscale := Response%/1000;
+return DACscale ;
+end;
+
+func TestMotorMotion(lmotor[],DACscale)
+' Description
+
+    if lmotor[max(lmotor)] >= DACscale or lmotor[min(lmotor)] <= - DACscale then
+        Message("Error: maximum/minimum motor position can not be reached, therefore motor motion will not be performed!.\n");
+        halt;
+    endif;
+return 1;
+end;
+
+func CorrectSignal(signal[][],DACscale)
+' CorrectSignal correct the signal that will be 'played' by PlayWaveAdd based on whether the DAC is in 5V or 10V mode.
+
+' Inputs:
+    ' signal    = the signal that will be corrected [V]
+' Outputs:
+    ' signal    = the corrected signal [V]
+
+    ArrDiv(signal,DACscale/5); ' Adjust motor position amplitude
+return 1;
+end;
+
+func BringToPosition(sig)
+' BringToStartPosition this function bring the motor to a desired position.
+    
+    FileNew(0, 1); ' Open a new datafile
+    SampleStart(0); ' Start sampling
+    Yield(1);
+    while SampleStatus() <> 2 do Yield() wend; ' Wait until samples has (really) started
+    var VPre := ChanValue(5,0);
+
+    SampleSeqVar(1, Vpre*Pow(2,32)/(2*DACscale));
+    SampleSeqVar(2, sig*Pow(2,32)/(2*DACscale));
+    SampleKey("I");
+
+    var waittime := abs(Vpre-sig)/0.40+1.0; 
+    Yield(waittime); ' Keep changing the motor position until we reach the starting position
+    SampleStop(); ' Stop sampling
+    FileClose(-1,-1);  ' Close the file and do not save it
+return 1;
+end;
